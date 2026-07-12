@@ -14,5 +14,8 @@
     "aes-gcm",
     "connector"
   ],
+  "dependencies": {
+    "mysql2": "^3.11.5"
+  },
   "license": "UNLICENSED"
 }

@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const platform = require("./platform/platformService");
+const { executeSchemaIfEnabled } = require("./db/mysqlPool");
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "..", "frontend");
@@ -110,7 +111,7 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     const body = req.method === "GET" ? {} : await readBody(req);
-    const data = route(req.method, pathname, body);
+    const data = await route(req.method, pathname, body);
     sendJson(res, 200, { ok: true, data });
   } catch (error) {
     sendJson(res, error.statusCode || 400, {
@@ -120,6 +121,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Trusted data space key demo is running at http://localhost:${PORT}`);
-});
+executeSchemaIfEnabled()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`Trusted data space key demo is running at http://localhost:${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error(`Failed to initialize database: ${error.message}`);
+    process.exit(1);
+  });

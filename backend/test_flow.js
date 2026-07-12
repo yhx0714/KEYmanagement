@@ -1,8 +1,8 @@
 const assert = require("assert");
 const platform = require("./platform/platformService");
 
-function run() {
-  const seeded = platform.seedDemo();
+async function run() {
+  const seeded = await platform.seedDemo();
   const access = platform.decryptData({
     consumerConnectorId: seeded.consumer.connectorId,
     resourceId: seeded.resource.resourceId
@@ -10,7 +10,7 @@ function run() {
   assert.strictEqual(access.result, "SUCCESS");
   assert.ok(access.plaintext.includes("可信数据空间"));
 
-  const attrUpdate = platform.updateConnectorAttributes(seeded.consumer.connectorId, [
+  const attrUpdate = await platform.updateConnectorAttributes(seeded.consumer.connectorId, [
     "department=sales",
     "role=researcher"
   ]);
@@ -23,7 +23,7 @@ function run() {
   assert.strictEqual(denied.result, "DENIED");
   assert.strictEqual(denied.reason, "POLICY_NOT_SATISFIED");
 
-  platform.updateConnectorAttributes(seeded.consumer.connectorId, [
+  await platform.updateConnectorAttributes(seeded.consumer.connectorId, [
     "department=rd",
     "role=researcher"
   ]);
@@ -52,4 +52,7 @@ function run() {
   console.log("Demo flow test passed.");
 }
 
-run();
+run().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

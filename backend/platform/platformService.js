@@ -5,6 +5,7 @@ const aesCrypto = require("../crypto/aesCrypto");
 const cpabeDemo = require("../crypto/cpabeDemo");
 const kmsService = require("../kms/kmsService");
 const policyEngine = require("../policy/policyEngine");
+const connectorRepository = require("../db/connectorRepository");
 const { getState, resetState } = require("../storage/store");
 const { nextId, nowIso } = require("../utils/ids");
 
@@ -29,7 +30,7 @@ function requireReady(state) {
   }
 }
 
-function initSystem() {
+async function initSystem() {
   const state = resetState();
   caService.initCa(state);
   const abeSecret = crypto.randomBytes(32).toString("base64");
@@ -76,11 +77,12 @@ function ensureAttributesDefined(state, attributes) {
   }
 }
 
-function issueAbeUserKey(state, connector) {
+async function issueAbeUserKey(state, connector) {
   const oldKey = connector.abeUserKey;
   if (oldKey && oldKey.status === "ACTIVE") {
     oldKey.status = "REVOKED";
     oldKey.updatedAt = nowIso();
+    await connectorRepository.saveAbeKeyStatus(oldKey);
   }
   const key = {
     keyId: nextId("key-abe-user"),
@@ -98,7 +100,7 @@ function issueAbeUserKey(state, connector) {
   return key;
 }
 
-function registerConnector(payload) {
+async function registerConnector(payload) {
   const state = getState();
   requireReady(state);
   const name = payload.name || `Connector ${state.connectors.length + 1}`;
@@ -112,9 +114,10 @@ function registerConnector(payload) {
   const connector = connectorService.buildConnector({ name, role, attributes });
   connector.certificate = caService.issueCertificate(state, connector);
   connector.status = "REGISTERED";
-  connector.abeUserKey = issueAbeUserKey(state, connector);
+  connector.abeUserKey = await issueAbeUserKey(state, connector);
   connector.updatedAt = nowIso();
   state.connectors.push(connector);
+  await connectorRepository.saveConnector(connector);
   addLog(state, "CONNECTOR_REGISTER", connector.connectorId, connector.connectorId, "SUCCESS", null, [
     "IDENTITY_KEY_GENERATED",
     "CERTIFICATE_ISSUED",
@@ -140,7 +143,11 @@ function connectorView(connector) {
   };
 }
 
-function listConnectors() {
+async function listConnectors() {
+  const dbConnectors = await connectorRepository.listConnectors();
+  if (dbConnectors) {
+    return dbConnectors;
+  }
   return getState().connectors.map(connectorView);
 }
 
@@ -292,7 +299,7 @@ function denied(reason, resource, consumer, steps) {
   };
 }
 
-function updateConnectorAttributes(connectorId, attributes) {
+async function updateConnectorAttributes(connectorId, attributes) {
   const state = getState();
   requireReady(state);
   ensureAttributesDefined(state, attributes);
@@ -305,8 +312,9 @@ function updateConnectorAttributes(connectorId, attributes) {
   });
   connector.attributes = [...attributes];
   const oldKeyId = connector.abeUserKey ? connector.abeUserKey.keyId : null;
-  const newKey = issueAbeUserKey(state, connector);
+  const newKey = await issueAbeUserKey(state, connector);
   connector.updatedAt = nowIso();
+  await connectorRepository.updateAttributes(connector);
   const accessPreview = state.resources.map((resource) => ({
     resourceId: resource.resourceId,
     policy: resource.abePolicy,
@@ -403,14 +411,14 @@ function logs() {
   return getState().logs;
 }
 
-function seedDemo() {
-  initSystem();
-  const a = registerConnector({
+async function seedDemo() {
+  await initSystem();
+  const a = await registerConnector({
     name: "Connector A",
     role: "PROVIDER",
     attributes: ["department=rd", "role=researcher", "level=3"]
   });
-  const b = registerConnector({
+  const b = await registerConnector({
     name: "Connector B",
     role: "CONSUMER",
     attributes: ["department=rd", "role=researcher"]
