@@ -71,14 +71,13 @@ function serveStatic(req, res) {
 
 function route(method, pathname, body) {
   if (method === "POST" && pathname === "/api/system/init") return platform.initSystem();
-  if (method === "POST" && pathname === "/api/system/seed") return platform.seedDemo();
   if (method === "GET" && pathname === "/api/system/status") return platform.status();
   if (method === "GET" && pathname === "/api/connectors") return platform.listConnectors();
   if (method === "POST" && pathname === "/api/connectors/register") return platform.registerConnector(body);
   if (method === "GET" && pathname === "/api/data/resources") return platform.listResources();
   if (method === "POST" && pathname === "/api/data/encrypt") return platform.publishData(body);
   if (method === "POST" && pathname === "/api/data/decrypt") return platform.decryptData(body);
-  if (method === "POST" && pathname === "/api/files/upload") return platform.uploadFile(body);
+  if (method === "POST" && pathname === "/api/files/publish") return platform.publishConnectorFile(body);
   if (method === "POST" && pathname === "/api/files/download") return platform.downloadFile(body);
   if (method === "GET" && pathname === "/api/keys") return platform.listKeys();
   if (method === "GET" && pathname === "/api/logs") return platform.logs();
@@ -86,6 +85,14 @@ function route(method, pathname, body) {
   const attrMatch = pathname.match(/^\/api\/connectors\/([^/]+)\/attributes$/);
   if (method === "PUT" && attrMatch) {
     return platform.updateConnectorAttributes(attrMatch[1], body.attributes || []);
+  }
+
+  const importFileMatch = pathname.match(/^\/api\/connectors\/([^/]+)\/files\/import$/);
+  if (method === "POST" && importFileMatch) {
+    return platform.importConnectorFile({
+      ...body,
+      connectorId: importFileMatch[1]
+    });
   }
 
   const revokeMatch = pathname.match(/^\/api\/keys\/([^/]+)\/revoke$/);

@@ -96,6 +96,38 @@ async function saveConnector(connector) {
   }
 }
 
+async function clearAllDemoData() {
+  if (!isDbEnabled()) {
+    return;
+  }
+  const pool = getPool();
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await safeExecute(connection, "DELETE FROM connector_files");
+    await safeExecute(connection, "DELETE FROM connector_abe_keys");
+    await safeExecute(connection, "DELETE FROM connector_attributes");
+    await safeExecute(connection, "DELETE FROM connector_certificates");
+    await safeExecute(connection, "DELETE FROM connectors");
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function safeExecute(connection, sql, params = []) {
+  try {
+    await connection.execute(sql, params);
+  } catch (error) {
+    if (error.code !== "ER_NO_SUCH_TABLE") {
+      throw error;
+    }
+  }
+}
+
 async function replaceActiveAttributes(connection, connectorId, attributes) {
   await connection.execute(
     `
@@ -189,6 +221,60 @@ async function updateAttributes(connector) {
   }
 }
 
+async function saveConnectorFile(fileRecord) {
+  if (!isDbEnabled()) {
+    return;
+  }
+  const pool = getPool();
+  await pool.execute(
+    `
+      INSERT INTO connector_files
+        (connector_file_id, connector_id, file_name, mime_type, file_size,
+         local_path, origin, status, published_resource_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        file_name = VALUES(file_name),
+        mime_type = VALUES(mime_type),
+        file_size = VALUES(file_size),
+        local_path = VALUES(local_path),
+        origin = VALUES(origin),
+        status = VALUES(status),
+        published_resource_id = VALUES(published_resource_id),
+        updated_at = VALUES(updated_at)
+    `,
+    [
+      fileRecord.connectorFileId,
+      fileRecord.connectorId,
+      fileRecord.fileName,
+      fileRecord.mimeType,
+      fileRecord.fileSize,
+      fileRecord.localPath,
+      fileRecord.origin,
+      fileRecord.status,
+      fileRecord.publishedResourceId || null,
+      toMysqlDate(fileRecord.createdAt),
+      toMysqlDate(fileRecord.updatedAt)
+    ]
+  );
+}
+
+async function updateConnectorFilePublished(connectorFileId, resourceId) {
+  if (!isDbEnabled()) {
+    return;
+  }
+  const pool = getPool();
+  await pool.execute(
+    `
+      UPDATE connector_files
+      SET status = 'PUBLISHED',
+          published_resource_id = ?,
+          updated_at = NOW()
+      WHERE connector_file_id = ?
+    `,
+    [resourceId, connectorFileId]
+  );
+}
+
 async function listConnectors() {
   if (!isDbEnabled()) {
     return null;
@@ -275,8 +361,11 @@ async function listConnectors() {
 }
 
 module.exports = {
+  clearAllDemoData,
   listConnectors,
   saveAbeKeyStatus,
   saveConnector,
+  saveConnectorFile,
+  updateConnectorFilePublished,
   updateAttributes
 };

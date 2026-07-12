@@ -6,6 +6,7 @@ const cpabeDemo = require("../crypto/cpabeDemo");
 const kmsService = require("../kms/kmsService");
 const policyEngine = require("../policy/policyEngine");
 const connectorRepository = require("../db/connectorRepository");
+const connectorFileStorage = require("../storage/connectorFileStorage");
 const localFileStorage = require("../storage/localFileStorage");
 const { getState, resetState } = require("../storage/store");
 const { nextId, nowIso } = require("../utils/ids");
@@ -32,6 +33,9 @@ function requireReady(state) {
 }
 
 async function initSystem() {
+  await connectorRepository.clearAllDemoData();
+  connectorFileStorage.clearConnectorDirectories();
+  localFileStorage.clearEncryptedFiles();
   const state = resetState();
   caService.initCa(state);
   const abeSecret = crypto.randomBytes(32).toString("base64");
@@ -50,6 +54,8 @@ async function initSystem() {
     "CA_INITIALIZED",
     "AA_INITIALIZED",
     "KMS_INITIALIZED",
+    "DATABASE_CLEARED",
+    "LOCAL_STORAGE_CLEARED",
     "PLATFORM_READY"
   ]);
   return status();
@@ -113,6 +119,8 @@ async function registerConnector(payload) {
   ensureAttributesDefined(state, attributes);
 
   const connector = connectorService.buildConnector({ name, role, attributes });
+  connector.fileDirectory = connectorFileStorage.connectorDirectory(connector.connectorId);
+  connector.ownedFiles = [];
   connector.certificate = caService.issueCertificate(state, connector);
   connector.status = "REGISTERED";
   connector.abeUserKey = await issueAbeUserKey(state, connector);
@@ -138,6 +146,8 @@ function connectorView(connector) {
     certificate: connector.certificate,
     attributes: connector.attributes,
     abeUserKey: connector.abeUserKey,
+    fileDirectory: connector.fileDirectory,
+    ownedFiles: connector.ownedFiles || [],
     publicKeyFingerprint: connector.publicKeyFingerprint,
     createdAt: connector.createdAt,
     updatedAt: connector.updatedAt
@@ -145,10 +155,6 @@ function connectorView(connector) {
 }
 
 async function listConnectors() {
-  const dbConnectors = await connectorRepository.listConnectors();
-  if (dbConnectors) {
-    return dbConnectors;
-  }
   return getState().connectors.map(connectorView);
 }
 
@@ -231,6 +237,14 @@ function resourceView(resource, includeCiphertext) {
 
 function listResources() {
   return getState().resources.map((resource) => resourceView(resource, false));
+}
+
+function findConnectorFile(connector, connectorFileId) {
+  const file = (connector.ownedFiles || []).find((item) => item.connectorFileId === connectorFileId);
+  if (!file) {
+    throw new Error("CONNECTOR_FILE_NOT_FOUND");
+  }
+  return file;
 }
 
 function assertActiveDekOrDenied(state, resource, consumer) {
@@ -318,16 +332,56 @@ function decryptData(payload) {
   };
 }
 
-function uploadFile(payload) {
+async function importConnectorFile(payload) {
   const state = getState();
   requireReady(state);
-  const provider = getConnector(state, payload.providerConnectorId, "PROVIDER");
-  policyEngine.validate(payload.abePolicy);
+  const connector = getConnector(state, payload.connectorId, "CONNECTOR");
   if (!payload.contentBase64) {
     throw new Error("FILE_CONTENT_REQUIRED");
   }
 
   const fileBuffer = Buffer.from(payload.contentBase64, "base64");
+  const connectorFileId = nextId("cfile");
+  const fileName = payload.fileName || `${connectorFileId}.bin`;
+  const now = nowIso();
+  const localPath = connectorFileStorage.writeConnectorFile(
+    connector.connectorId,
+    connectorFileId,
+    fileName,
+    fileBuffer
+  );
+  const fileRecord = {
+    connectorFileId,
+    connectorId: connector.connectorId,
+    fileName,
+    mimeType: payload.mimeType || "application/octet-stream",
+    fileSize: fileBuffer.length,
+    localPath,
+    origin: "LOCAL_UPLOAD",
+    status: "LOCAL",
+    publishedResourceId: null,
+    createdAt: now,
+    updatedAt: now
+  };
+  connector.ownedFiles = connector.ownedFiles || [];
+  connector.ownedFiles.push(fileRecord);
+  await connectorRepository.saveConnectorFile(fileRecord);
+  addLog(state, "CONNECTOR_FILE_IMPORT", connector.connectorId, connectorFileId, "SUCCESS", null, [
+    "CONNECTOR_VERIFIED",
+    "LOCAL_FILE_RECEIVED",
+    "FILE_WRITTEN_TO_CONNECTOR_DIRECTORY",
+    "FILE_METADATA_SAVED"
+  ]);
+  return fileRecord;
+}
+
+async function publishConnectorFile(payload) {
+  const state = getState();
+  requireReady(state);
+  const provider = getConnector(state, payload.providerConnectorId, "PROVIDER");
+  policyEngine.validate(payload.abePolicy);
+  const connectorFile = findConnectorFile(provider, payload.connectorFileId);
+  const fileBuffer = connectorFileStorage.readConnectorFile(connectorFile.localPath);
   const resourceId = nextId("resource");
   const dek = kmsService.createDek(state, provider.connectorId, resourceId);
   const encryptedData = aesCrypto.encryptBuffer(fileBuffer, dek.material);
@@ -337,12 +391,13 @@ function uploadFile(payload) {
 
   const resource = {
     resourceId,
-    name: payload.name || payload.fileName || resourceId,
+    name: payload.name || connectorFile.fileName || resourceId,
     resourceType: "FILE",
-    fileName: payload.fileName || `${resourceId}.bin`,
-    mimeType: payload.mimeType || "application/octet-stream",
+    fileName: connectorFile.fileName,
+    mimeType: connectorFile.mimeType || "application/octet-stream",
     fileSize: fileBuffer.length,
     providerConnectorId: provider.connectorId,
+    sourceConnectorFileId: connectorFile.connectorFileId,
     status: "PUBLISHED",
     abePolicy: payload.abePolicy,
     keyVersion: 1,
@@ -356,8 +411,13 @@ function uploadFile(payload) {
     updatedAt: nowIso()
   };
   state.resources.push(resource);
-  addLog(state, "FILE_UPLOAD", provider.connectorId, resource.resourceId, "SUCCESS", null, [
+  connectorFile.status = "PUBLISHED";
+  connectorFile.publishedResourceId = resourceId;
+  connectorFile.updatedAt = nowIso();
+  await connectorRepository.updateConnectorFilePublished(connectorFile.connectorFileId, resourceId);
+  addLog(state, "FILE_PUBLISH", provider.connectorId, resource.resourceId, "SUCCESS", null, [
     "PROVIDER_CERT_VERIFIED",
+    "CONNECTOR_FILE_SELECTED",
     "POLICY_VALIDATED",
     "DEK_GENERATED",
     "FILE_AES_ENCRYPTED",
@@ -368,7 +428,7 @@ function uploadFile(payload) {
   return resourceView(resource, false);
 }
 
-function downloadFile(payload) {
+async function downloadFile(payload) {
   const state = getState();
   requireReady(state);
   const consumer = getConnector(state, payload.consumerConnectorId, "CONSUMER");
@@ -395,6 +455,30 @@ function downloadFile(payload) {
   const encryptedData = localFileStorage.readEncryptedFile(resource.storagePath);
   const unwrappedDek = cpabeDemo.decryptDek(resource.encryptedDek, consumer.abeUserKey, consumer.attributes);
   const fileBuffer = aesCrypto.decryptBuffer(encryptedData, unwrappedDek);
+  const connectorFileId = nextId("cfile");
+  const downloadedPath = connectorFileStorage.writeConnectorFile(
+    consumer.connectorId,
+    connectorFileId,
+    resource.fileName,
+    fileBuffer
+  );
+  const now = nowIso();
+  const fileRecord = {
+    connectorFileId,
+    connectorId: consumer.connectorId,
+    fileName: resource.fileName,
+    mimeType: resource.mimeType,
+    fileSize: fileBuffer.length,
+    localPath: downloadedPath,
+    origin: "SYSTEM_DOWNLOAD",
+    status: "DOWNLOADED",
+    publishedResourceId: resource.resourceId,
+    createdAt: now,
+    updatedAt: now
+  };
+  consumer.ownedFiles = consumer.ownedFiles || [];
+  consumer.ownedFiles.push(fileRecord);
+  await connectorRepository.saveConnectorFile(fileRecord);
   const steps = [
     "CONSUMER_CERT_VERIFIED",
     "CONSUMER_STATUS_CHECKED",
@@ -404,7 +488,8 @@ function downloadFile(payload) {
     "POLICY_SATISFIED",
     "ENCRYPTED_FILE_LOADED",
     "DEK_CPABE_DECRYPTED",
-    "FILE_AES_DECRYPTED"
+    "FILE_AES_DECRYPTED",
+    "FILE_WRITTEN_TO_CONNECTOR_DIRECTORY"
   ];
   addLog(state, "FILE_DOWNLOAD", consumer.connectorId, resource.resourceId, "SUCCESS", null, steps);
   return {
@@ -413,6 +498,8 @@ function downloadFile(payload) {
     fileName: resource.fileName,
     mimeType: resource.mimeType,
     fileSize: fileBuffer.length,
+    connectorFileId,
+    savedToConnectorPath: downloadedPath,
     contentBase64: fileBuffer.toString("base64"),
     matchedPolicy: resource.abePolicy,
     consumerAttributes: consumer.attributes,
@@ -582,17 +669,17 @@ module.exports = {
   decryptData,
   downloadFile,
   destroyKey,
+  importConnectorFile,
   initSystem,
   listConnectors,
   listKeys,
   listResources,
   logs,
   publishData,
+  publishConnectorFile,
   registerConnector,
   rekeyResource,
   revokeKey,
-  seedDemo,
   status,
-  uploadFile,
   updateConnectorAttributes
 };

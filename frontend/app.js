@@ -36,6 +36,42 @@ function renderResult(target, data) {
   target.textContent = result;
 }
 
+function selectedConnector(selectId) {
+  const connectorId = el(selectId).value;
+  return state.connectors.find((item) => item.connectorId === connectorId);
+}
+
+function selectedResource() {
+  const resourceId = el("resourceSelect").value;
+  return state.resources.find((item) => item.resourceId === resourceId);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function downloadBase64File(fileName, mimeType, contentBase64) {
+  const byteCharacters = atob(contentBase64);
+  const byteNumbers = Array.from(byteCharacters, (char) => char.charCodeAt(0));
+  const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName || "download.bin";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function renderStatus(data) {
   const items = [
     ["Platform", data.platformStatus],
@@ -71,12 +107,16 @@ function renderConnectors() {
             <div class="tags">
               ${connector.attributes.map((attr) => `<span class="tag">${attr}</span>`).join("")}
             </div>
-            <p class="muted">证书：${connector.certificate?.certificateId || "-"} · ABE Key：${connector.abeUserKey?.keyId || "-"}</p>
+            <p class="muted">目录：${connector.fileDirectory || "-"}</p>
+            <p class="muted">本地文件数：${(connector.ownedFiles || []).length}</p>
           </div>
         `
       )
-      .join("") || '<p class="muted">暂无 Connector</p>';
+      .join("") || '<p class="muted">暂无 Connector，请先手动新增。</p>';
 
+  const allOptions = state.connectors
+    .map((item) => `<option value="${item.connectorId}">${item.name}</option>`)
+    .join("");
   const providerOptions = state.connectors
     .filter((item) => item.role === "PROVIDER")
     .map((item) => `<option value="${item.connectorId}">${item.name}</option>`)
@@ -85,17 +125,44 @@ function renderConnectors() {
     .filter((item) => item.role === "CONSUMER")
     .map((item) => `<option value="${item.connectorId}">${item.name}</option>`)
     .join("");
-  el("providerSelect").innerHTML = providerOptions;
-  el("fileProviderSelect").innerHTML = providerOptions;
+
+  el("fileOwnerSelect").innerHTML = allOptions;
+  el("publishProviderSelect").innerHTML = providerOptions;
   el("consumerSelect").innerHTML = consumerOptions;
+  renderConnectorFiles();
+}
+
+function renderConnectorFiles() {
+  const owner = selectedConnector("fileOwnerSelect");
+  const publisher = selectedConnector("publishProviderSelect");
+  const ownerFiles = owner?.ownedFiles || [];
+  const publishFiles = (publisher?.ownedFiles || []).filter((file) => file.origin === "LOCAL_UPLOAD");
+
+  el("connectorFilesList").innerHTML =
+    ownerFiles
+      .map(
+        (file) => `
+          <div class="item">
+            <div class="item-title">
+              <span>${file.fileName}</span>
+              ${statusPill(file.status)}
+            </div>
+            <p class="muted">大小：${file.fileSize} bytes · 来源：${file.origin}</p>
+            <p class="muted">路径：${file.localPath}</p>
+          </div>
+        `
+      )
+      .join("") || '<p class="muted">该 Connector 目录暂时为空。</p>';
+
+  el("connectorFileSelect").innerHTML = publishFiles
+    .map((file) => `<option value="${file.connectorFileId}">${file.fileName} · ${file.status}</option>`)
+    .join("");
 }
 
 function renderResources() {
-  el("resourceSelect").innerHTML = state.resources
-    .map((item) => {
-      const type = item.resourceType === "FILE" ? "文件" : "文本";
-      return `<option value="${item.resourceId}">[${type}] ${item.name} · ${item.resourceId}</option>`;
-    })
+  const fileResources = state.resources.filter((item) => item.resourceType === "FILE");
+  el("resourceSelect").innerHTML = fileResources
+    .map((item) => `<option value="${item.resourceId}">${item.name} · ${item.resourceId}</option>`)
     .join("");
 }
 
@@ -163,47 +230,10 @@ async function refresh() {
   renderLogs(logs);
 }
 
-function selectedResource() {
-  const resourceId = el("resourceSelect").value;
-  return state.resources.find((item) => item.resourceId === resourceId);
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result);
-      resolve(result.slice(result.indexOf(",") + 1));
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function downloadBase64File(fileName, mimeType, contentBase64) {
-  const byteCharacters = atob(contentBase64);
-  const byteNumbers = Array.from(byteCharacters, (char) => char.charCodeAt(0));
-  const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType || "application/octet-stream" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName || "download.bin";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
-
 async function main() {
   el("initBtn").addEventListener("click", async () => {
     const data = await api("/api/system/init", { method: "POST", body: {} });
-    renderResult(el("encryptResult"), data);
-    await refresh();
-  });
-
-  el("seedBtn").addEventListener("click", async () => {
-    const data = await api("/api/system/seed", { method: "POST", body: {} });
-    renderResult(el("encryptResult"), data);
+    renderResult(el("fileImportResult"), data);
     await refresh();
   });
 
@@ -216,79 +246,72 @@ async function main() {
         attributes: splitAttrs(el("connectorAttrs").value)
       }
     });
-    renderResult(el("decryptResult"), data);
+    renderResult(el("fileImportResult"), data);
     await refresh();
   });
 
-  el("encryptBtn").addEventListener("click", async () => {
-    const data = await api("/api/data/encrypt", {
-      method: "POST",
-      body: {
-        providerConnectorId: el("providerSelect").value,
-        name: el("resourceName").value,
-        plaintext: el("plaintextInput").value,
-        abePolicy: el("policyInput").value
-      }
-    });
-    renderResult(el("encryptResult"), data);
-    await refresh();
-  });
+  el("fileOwnerSelect").addEventListener("change", renderConnectorFiles);
+  el("publishProviderSelect").addEventListener("change", renderConnectorFiles);
 
-  el("fileUploadBtn").addEventListener("click", async () => {
+  el("importFileBtn").addEventListener("click", async () => {
+    const connector = selectedConnector("fileOwnerSelect");
     const file = el("fileInput").files[0];
-    if (!file) {
-      renderResult(el("fileUploadResult"), "请先选择一个本地文件。");
+    if (!connector || !file) {
+      renderResult(el("fileImportResult"), "请先选择 Connector 和本地文件。");
       return;
     }
     const contentBase64 = await fileToBase64(file);
-    const data = await api("/api/files/upload", {
+    const data = await api(`/api/connectors/${connector.connectorId}/files/import`, {
       method: "POST",
       body: {
-        providerConnectorId: el("fileProviderSelect").value,
-        name: file.name,
         fileName: file.name,
         mimeType: file.type || "application/octet-stream",
-        contentBase64,
-        abePolicy: el("filePolicyInput").value
+        contentBase64
       }
     });
-    renderResult(el("fileUploadResult"), data);
+    renderResult(el("fileImportResult"), data);
     await refresh();
   });
 
-  el("decryptBtn").addEventListener("click", async () => {
-    const resource = selectedResource();
-    if (!resource || resource.resourceType === "FILE") {
-      renderResult(el("decryptResult"), "当前选择的是文件资源，请点击“下载文件”。");
+  el("publishFileBtn").addEventListener("click", async () => {
+    const provider = selectedConnector("publishProviderSelect");
+    const connectorFileId = el("connectorFileSelect").value;
+    if (!provider || !connectorFileId) {
+      renderResult(el("filePublishResult"), "请先选择 Provider 和它目录中的文件。");
       return;
     }
-    const data = await api("/api/data/decrypt", {
+    const data = await api("/api/files/publish", {
       method: "POST",
       body: {
-        consumerConnectorId: el("consumerSelect").value,
-        resourceId: resource.resourceId
+        providerConnectorId: provider.connectorId,
+        connectorFileId,
+        abePolicy: el("filePolicyInput").value
       }
     });
-    renderResult(el("decryptResult"), data);
+    renderResult(el("filePublishResult"), data);
     await refresh();
   });
 
   el("fileDownloadBtn").addEventListener("click", async () => {
     const resource = selectedResource();
-    if (!resource || resource.resourceType !== "FILE") {
-      renderResult(el("decryptResult"), "当前选择的不是文件资源，请先上传或选择一个文件资源。");
+    const consumer = selectedConnector("consumerSelect");
+    if (!resource || !consumer) {
+      renderResult(el("downloadResult"), "请先选择 Consumer 和系统文件资源。");
       return;
     }
     const data = await api("/api/files/download", {
       method: "POST",
       body: {
-        consumerConnectorId: el("consumerSelect").value,
+        consumerConnectorId: consumer.connectorId,
         resourceId: resource.resourceId
       }
     });
-    renderResult(el("decryptResult"), {
+    renderResult(el("downloadResult"), {
       ...data,
-      contentBase64: `[已返回 ${data.contentBase64.length} 个 Base64 字符，并触发浏览器下载]`
+      contentBase64:
+        data.result === "SUCCESS"
+          ? `[已返回 ${data.contentBase64.length} 个 Base64 字符，并写入 Consumer 目录]`
+          : data.contentBase64
     });
     if (data.result === "SUCCESS") {
       downloadBase64File(data.fileName, data.mimeType, data.contentBase64);
@@ -297,50 +320,58 @@ async function main() {
   });
 
   el("setSalesBtn").addEventListener("click", async () => {
-    const consumerId = el("consumerSelect").value;
-    const data = await api(`/api/connectors/${consumerId}/attributes`, {
+    const consumer = selectedConnector("consumerSelect");
+    if (!consumer) {
+      renderResult(el("downloadResult"), "请先选择 Consumer。");
+      return;
+    }
+    const data = await api(`/api/connectors/${consumer.connectorId}/attributes`, {
       method: "PUT",
       body: { attributes: ["department=sales", "role=researcher"] }
     });
-    renderResult(el("decryptResult"), data);
+    renderResult(el("downloadResult"), data);
     await refresh();
   });
 
   el("setRdBtn").addEventListener("click", async () => {
-    const consumerId = el("consumerSelect").value;
-    const data = await api(`/api/connectors/${consumerId}/attributes`, {
+    const consumer = selectedConnector("consumerSelect");
+    if (!consumer) {
+      renderResult(el("downloadResult"), "请先选择 Consumer。");
+      return;
+    }
+    const data = await api(`/api/connectors/${consumer.connectorId}/attributes`, {
       method: "PUT",
       body: { attributes: ["department=rd", "role=researcher"] }
     });
-    renderResult(el("decryptResult"), data);
+    renderResult(el("downloadResult"), data);
     await refresh();
   });
 
   el("rekeyBtn").addEventListener("click", async () => {
     const resource = selectedResource();
     if (!resource) {
-      renderResult(el("decryptResult"), "请先选择一个资源。");
+      renderResult(el("downloadResult"), "请先选择一个系统文件资源。");
       return;
     }
     const data = await api(`/api/data/resources/${resource.resourceId}/rekey`, {
       method: "POST",
       body: {}
     });
-    renderResult(el("decryptResult"), data);
+    renderResult(el("downloadResult"), data);
     await refresh();
   });
 
   el("revokeDekBtn").addEventListener("click", async () => {
     const resource = selectedResource();
     if (!resource) {
-      renderResult(el("decryptResult"), "请先选择一个资源。");
+      renderResult(el("downloadResult"), "请先选择一个系统文件资源。");
       return;
     }
     const data = await api(`/api/keys/${resource.dekKeyId}/revoke`, {
       method: "POST",
       body: {}
     });
-    renderResult(el("decryptResult"), data);
+    renderResult(el("downloadResult"), data);
     await refresh();
   });
 
@@ -357,5 +388,5 @@ async function main() {
 }
 
 main().catch((error) => {
-  renderResult(el("decryptResult"), error.message);
+  renderResult(el("downloadResult"), error.message);
 });

@@ -10,10 +10,9 @@
     <header class="topbar">
       <div>
         <h1>可信数据空间密钥管理与加密演示系统</h1>
-        <p>演示 Connector 身份、属性策略、DEK 管理、文本加密和文件上传下载。</p>
+        <p>手动注册 Connector，管理 Connector 本地文件目录，并按属性策略发布和下载文件。</p>
       </div>
       <div class="topbar-actions">
-        <button id="seedBtn">生成演示数据</button>
         <button id="initBtn" class="secondary">重新初始化</button>
       </div>
     </header>
@@ -35,13 +34,13 @@
         <div class="form-grid">
           <label>
             名称
-            <input id="connectorName" value="Connector C" />
+            <input id="connectorName" value="Connector A" />
           </label>
           <label>
             角色
             <select id="connectorRole">
-              <option value="CONSUMER">CONSUMER</option>
               <option value="PROVIDER">PROVIDER</option>
+              <option value="CONSUMER">CONSUMER</option>
             </select>
           </label>
           <label class="wide">
@@ -54,59 +53,49 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>文本加密发布</h2>
-          <button id="encryptBtn">加密并发布</button>
+          <h2>Connector 本地文件目录</h2>
+          <button id="importFileBtn">导入到目录</button>
         </div>
         <div class="form-grid">
           <label>
-            Provider
-            <select id="providerSelect"></select>
-          </label>
-          <label>
-            资源名称
-            <input id="resourceName" value="研发数据样例" />
-          </label>
-          <label class="wide">
-            访问策略
-            <input id="policyInput" value="department=rd AND role=researcher" />
-          </label>
-          <label class="wide">
-            明文数据
-            <textarea id="plaintextInput">这是一份需要在可信数据空间中安全共享的研发数据。</textarea>
-          </label>
-        </div>
-        <div id="encryptResult" class="result"></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>文件上传加密</h2>
-          <button id="fileUploadBtn">上传并加密</button>
-        </div>
-        <div class="form-grid">
-          <label>
-            Provider
-            <select id="fileProviderSelect"></select>
+            Connector
+            <select id="fileOwnerSelect"></select>
           </label>
           <label>
             本地文件
             <input id="fileInput" type="file" />
           </label>
-          <label class="wide">
-            文件访问策略
-            <input id="filePolicyInput" value="department=rd AND role=researcher" />
-          </label>
         </div>
-        <div id="fileUploadResult" class="result"></div>
+        <div id="connectorFilesList" class="list"></div>
+        <div id="fileImportResult" class="result"></div>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <h2>数据访问与文件下载</h2>
-          <div class="action-row compact">
-            <button id="decryptBtn">解密文本</button>
-            <button id="fileDownloadBtn">下载文件</button>
-          </div>
+          <h2>从 Connector 发布文件到系统</h2>
+          <button id="publishFileBtn">发布文件</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Provider
+            <select id="publishProviderSelect"></select>
+          </label>
+          <label>
+            Provider 目录文件
+            <select id="connectorFileSelect"></select>
+          </label>
+          <label class="wide">
+            访问策略
+            <input id="filePolicyInput" value="department=rd AND role=researcher" />
+          </label>
+        </div>
+        <div id="filePublishResult" class="result"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>系统文件下载</h2>
+          <button id="fileDownloadBtn">按规则下载文件</button>
         </div>
         <div class="form-grid">
           <label>
@@ -114,7 +103,7 @@
             <select id="consumerSelect"></select>
           </label>
           <label>
-            资源
+            系统资源
             <select id="resourceSelect"></select>
           </label>
         </div>
@@ -122,7 +111,7 @@
           <button id="setSalesBtn" class="secondary">将 Consumer 改为销售属性</button>
           <button id="setRdBtn" class="secondary">恢复研发属性</button>
         </div>
-        <div id="decryptResult" class="result"></div>
+        <div id="downloadResult" class="result"></div>
       </section>
 
       <section class="panel">

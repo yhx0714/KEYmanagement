@@ -62,3 +62,23 @@ CREATE TABLE IF NOT EXISTS connector_abe_keys (
     FOREIGN KEY (connector_id) REFERENCES connectors(connector_id)
     ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS connector_files (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  connector_file_id VARCHAR(64) NOT NULL UNIQUE,
+  connector_id VARCHAR(64) NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  mime_type VARCHAR(128),
+  file_size BIGINT NOT NULL,
+  local_path VARCHAR(1024) NOT NULL,
+  origin VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  published_resource_id VARCHAR(64),
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  INDEX idx_connector_files_connector_id (connector_id),
+  INDEX idx_connector_files_resource_id (published_resource_id),
+  CONSTRAINT fk_file_connector
+    FOREIGN KEY (connector_id) REFERENCES connectors(connector_id)
+    ON DELETE CASCADE
+);

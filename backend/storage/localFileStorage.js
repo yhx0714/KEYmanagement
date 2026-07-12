@@ -31,7 +31,18 @@ function readEncryptedFile(storagePath) {
   return JSON.parse(content).encryptedData;
 }
 
+function clearEncryptedFiles() {
+  ensureStorageRoot();
+  for (const entry of fs.readdirSync(STORAGE_ROOT)) {
+    if (entry === ".gitkeep") {
+      continue;
+    }
+    fs.rmSync(path.join(STORAGE_ROOT, entry), { recursive: true, force: true });
+  }
+}
+
 module.exports = {
+  clearEncryptedFiles,
   readEncryptedFile,
   writeEncryptedFile
 };

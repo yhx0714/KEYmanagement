@@ -5,50 +5,41 @@ process.env.DB_ENABLED = "false";
 const platform = require("./platform/platformService");
 
 async function run() {
-  const seeded = await platform.seedDemo();
-  const access = platform.decryptData({
-    consumerConnectorId: seeded.consumer.connectorId,
-    resourceId: seeded.resource.resourceId
+  await platform.initSystem();
+
+  const provider = await platform.registerConnector({
+    name: "Connector A",
+    role: "PROVIDER",
+    attributes: ["department=rd", "role=researcher", "level=3"]
   });
-  assert.strictEqual(access.result, "SUCCESS");
-  assert.ok(access.plaintext.length > 0);
-
-  const attrUpdate = await platform.updateConnectorAttributes(seeded.consumer.connectorId, [
-    "department=sales",
-    "role=researcher"
-  ]);
-  assert.strictEqual(attrUpdate.accessPreview[0].after, "DENIED");
-
-  const denied = platform.decryptData({
-    consumerConnectorId: seeded.consumer.connectorId,
-    resourceId: seeded.resource.resourceId
+  const consumer = await platform.registerConnector({
+    name: "Connector B",
+    role: "CONSUMER",
+    attributes: ["department=rd", "role=researcher"]
   });
-  assert.strictEqual(denied.result, "DENIED");
-  assert.strictEqual(denied.reason, "POLICY_NOT_SATISFIED");
 
-  await platform.updateConnectorAttributes(seeded.consumer.connectorId, [
-    "department=rd",
-    "role=researcher"
-  ]);
-  const restored = platform.decryptData({
-    consumerConnectorId: seeded.consumer.connectorId,
-    resourceId: seeded.resource.resourceId
-  });
-  assert.strictEqual(restored.result, "SUCCESS");
+  assert.strictEqual((await platform.listConnectors()).length, 2);
+  assert.ok(provider.fileDirectory);
+  assert.ok(consumer.fileDirectory);
 
-  const uploadedFile = platform.uploadFile({
-    providerConnectorId: seeded.provider.connectorId,
-    name: "demo.txt",
+  const importedFile = await platform.importConnectorFile({
+    connectorId: provider.connectorId,
     fileName: "demo.txt",
     mimeType: "text/plain",
-    contentBase64: Buffer.from("hello trusted data space file", "utf8").toString("base64"),
+    contentBase64: Buffer.from("hello trusted data space file", "utf8").toString("base64")
+  });
+  assert.strictEqual(importedFile.status, "LOCAL");
+
+  const publishedFile = await platform.publishConnectorFile({
+    providerConnectorId: provider.connectorId,
+    connectorFileId: importedFile.connectorFileId,
     abePolicy: "department=rd AND role=researcher"
   });
-  assert.strictEqual(uploadedFile.resourceType, "FILE");
+  assert.strictEqual(publishedFile.resourceType, "FILE");
 
-  const downloadedFile = platform.downloadFile({
-    consumerConnectorId: seeded.consumer.connectorId,
-    resourceId: uploadedFile.resourceId
+  const downloadedFile = await platform.downloadFile({
+    consumerConnectorId: consumer.connectorId,
+    resourceId: publishedFile.resourceId
   });
   assert.strictEqual(downloadedFile.result, "SUCCESS");
   assert.strictEqual(
@@ -56,19 +47,38 @@ async function run() {
     "hello trusted data space file"
   );
 
-  const rekey = platform.rekeyResource(seeded.resource.resourceId);
-  assert.strictEqual(rekey.newVersion, 2);
+  const attrUpdate = await platform.updateConnectorAttributes(consumer.connectorId, [
+    "department=sales",
+    "role=researcher"
+  ]);
+  assert.strictEqual(attrUpdate.accessPreview[0].after, "DENIED");
 
-  const keys = platform.listKeys();
-  const activeDek = keys.find((key) => key.keyId === rekey.newDekKeyId);
-  assert.strictEqual(activeDek.status, "ACTIVE");
+  const denied = await platform.downloadFile({
+    consumerConnectorId: consumer.connectorId,
+    resourceId: publishedFile.resourceId
+  });
+  assert.strictEqual(denied.result, "DENIED");
+  assert.strictEqual(denied.reason, "POLICY_NOT_SATISFIED");
+
+  await platform.updateConnectorAttributes(consumer.connectorId, [
+    "department=rd",
+    "role=researcher"
+  ]);
+  const restored = await platform.downloadFile({
+    consumerConnectorId: consumer.connectorId,
+    resourceId: publishedFile.resourceId
+  });
+  assert.strictEqual(restored.result, "SUCCESS");
+
+  const rekey = platform.rekeyResource(publishedFile.resourceId);
+  assert.strictEqual(rekey.newVersion, 2);
 
   const revoked = platform.revokeKey(rekey.newDekKeyId);
   assert.strictEqual(revoked.status, "REVOKED");
 
-  const deniedByDek = platform.decryptData({
-    consumerConnectorId: seeded.consumer.connectorId,
-    resourceId: seeded.resource.resourceId
+  const deniedByDek = await platform.downloadFile({
+    consumerConnectorId: consumer.connectorId,
+    resourceId: publishedFile.resourceId
   });
   assert.strictEqual(deniedByDek.reason, "DEK_REVOKED");
 
