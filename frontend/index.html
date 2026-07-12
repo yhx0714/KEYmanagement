@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>可信数据空间密钥管理 Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>可信数据空间密钥管理与加密演示系统</h1>
+        <p>CP-ABE + AES 混合加密、连接器身份认证、属性授权与密钥生命周期演示</p>
+      </div>
+      <div class="topbar-actions">
+        <button id="seedBtn">生成演示数据</button>
+        <button id="initBtn" class="secondary">重新初始化</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel overview">
+        <div class="panel-head">
+          <h2>系统总览</h2>
+          <button class="icon-btn" data-action="refresh">刷新</button>
+        </div>
+        <div id="statusGrid" class="status-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Connector 管理</h2>
+          <button id="registerBtn">新增 Connector</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            名称
+            <input id="connectorName" value="Connector C" />
+          </label>
+          <label>
+            角色
+            <select id="connectorRole">
+              <option value="CONSUMER">CONSUMER</option>
+              <option value="PROVIDER">PROVIDER</option>
+            </select>
+          </label>
+          <label class="wide">
+            属性
+            <input id="connectorAttrs" value="department=rd,role=researcher" />
+          </label>
+        </div>
+        <div id="connectorsList" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>数据加密发布</h2>
+          <button id="encryptBtn">加密并发布</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Provider
+            <select id="providerSelect"></select>
+          </label>
+          <label>
+            资源名称
+            <input id="resourceName" value="研发数据样例" />
+          </label>
+          <label class="wide">
+            访问策略
+            <input id="policyInput" value="department=rd AND role=researcher" />
+          </label>
+          <label class="wide">
+            明文数据
+            <textarea id="plaintextInput">这是一份需要在可信数据空间中安全共享的研发数据。</textarea>
+          </label>
+        </div>
+        <div id="encryptResult" class="result"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>数据访问解密</h2>
+          <button id="decryptBtn">请求访问</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Consumer
+            <select id="consumerSelect"></select>
+          </label>
+          <label>
+            资源
+            <select id="resourceSelect"></select>
+          </label>
+        </div>
+        <div class="action-row">
+          <button id="setSalesBtn" class="secondary">将 Consumer 改为销售属性</button>
+          <button id="setRdBtn" class="secondary">恢复研发属性</button>
+        </div>
+        <div id="decryptResult" class="result"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>密钥管理</h2>
+          <button id="rekeyBtn">资源重加密</button>
+        </div>
+        <div class="action-row">
+          <button id="revokeDekBtn" class="secondary">撤销当前资源 DEK</button>
+        </div>
+        <div id="keysList" class="table-wrap"></div>
+      </section>
+
+      <section class="panel logs">
+        <div class="panel-head">
+          <h2>流程日志</h2>
+          <button class="icon-btn" data-action="refresh">刷新</button>
+        </div>
+        <div id="logsList" class="logs-list"></div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
