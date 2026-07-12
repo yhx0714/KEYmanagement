@@ -6,6 +6,7 @@ const { executeSchemaIfEnabled } = require("./db/mysqlPool");
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "..", "frontend");
+const MAX_JSON_BODY_BYTES = Number(process.env.MAX_JSON_BODY_BYTES || 25 * 1024 * 1024);
 
 function sendJson(res, statusCode, data) {
   const body = JSON.stringify(data, null, 2);
@@ -23,7 +24,7 @@ function readBody(req) {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1024 * 1024) {
+      if (body.length > MAX_JSON_BODY_BYTES) {
         reject(new Error("REQUEST_TOO_LARGE"));
       }
     });
@@ -77,6 +78,8 @@ function route(method, pathname, body) {
   if (method === "GET" && pathname === "/api/data/resources") return platform.listResources();
   if (method === "POST" && pathname === "/api/data/encrypt") return platform.publishData(body);
   if (method === "POST" && pathname === "/api/data/decrypt") return platform.decryptData(body);
+  if (method === "POST" && pathname === "/api/files/upload") return platform.uploadFile(body);
+  if (method === "POST" && pathname === "/api/files/download") return platform.downloadFile(body);
   if (method === "GET" && pathname === "/api/keys") return platform.listKeys();
   if (method === "GET" && pathname === "/api/logs") return platform.logs();
 

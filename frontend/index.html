@@ -10,7 +10,7 @@
     <header class="topbar">
       <div>
         <h1>可信数据空间密钥管理与加密演示系统</h1>
-        <p>CP-ABE + AES 混合加密、连接器身份认证、属性授权与密钥生命周期演示</p>
+        <p>演示 Connector 身份、属性策略、DEK 管理、文本加密和文件上传下载。</p>
       </div>
       <div class="topbar-actions">
         <button id="seedBtn">生成演示数据</button>
@@ -54,7 +54,7 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>数据加密发布</h2>
+          <h2>文本加密发布</h2>
           <button id="encryptBtn">加密并发布</button>
         </div>
         <div class="form-grid">
@@ -80,8 +80,33 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>数据访问解密</h2>
-          <button id="decryptBtn">请求访问</button>
+          <h2>文件上传加密</h2>
+          <button id="fileUploadBtn">上传并加密</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Provider
+            <select id="fileProviderSelect"></select>
+          </label>
+          <label>
+            本地文件
+            <input id="fileInput" type="file" />
+          </label>
+          <label class="wide">
+            文件访问策略
+            <input id="filePolicyInput" value="department=rd AND role=researcher" />
+          </label>
+        </div>
+        <div id="fileUploadResult" class="result"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>数据访问与文件下载</h2>
+          <div class="action-row compact">
+            <button id="decryptBtn">解密文本</button>
+            <button id="fileDownloadBtn">下载文件</button>
+          </div>
         </div>
         <div class="form-grid">
           <label>

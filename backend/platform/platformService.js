@@ -6,6 +6,7 @@ const cpabeDemo = require("../crypto/cpabeDemo");
 const kmsService = require("../kms/kmsService");
 const policyEngine = require("../policy/policyEngine");
 const connectorRepository = require("../db/connectorRepository");
+const localFileStorage = require("../storage/localFileStorage");
 const { getState, resetState } = require("../storage/store");
 const { nextId, nowIso } = require("../utils/ids");
 
@@ -180,6 +181,7 @@ function publishData(payload) {
   const resource = {
     resourceId,
     name: payload.name || resourceId,
+    resourceType: "TEXT",
     providerConnectorId: provider.connectorId,
     status: "PUBLISHED",
     abePolicy: payload.abePolicy,
@@ -206,12 +208,19 @@ function resourceView(resource, includeCiphertext) {
   return {
     resourceId: resource.resourceId,
     name: resource.name,
+    resourceType: resource.resourceType || "TEXT",
+    fileName: resource.fileName,
+    mimeType: resource.mimeType,
+    fileSize: resource.fileSize,
+    storageType: resource.storageType,
     providerConnectorId: resource.providerConnectorId,
     status: resource.status,
     abePolicy: resource.abePolicy,
     keyVersion: resource.keyVersion,
     dekKeyId: resource.dekKeyId,
-    ciphertextPreview: resource.encryptedData.ciphertext.slice(0, 48),
+    ciphertextPreview: resource.encryptedData
+      ? resource.encryptedData.ciphertext.slice(0, 48)
+      : resource.ciphertextPreview,
     encryptedDekPreview: resource.encryptedDek.slice(0, 48),
     encryptedData: includeCiphertext ? resource.encryptedData : undefined,
     encryptedDek: includeCiphertext ? resource.encryptedDek : undefined,
@@ -222,6 +231,43 @@ function resourceView(resource, includeCiphertext) {
 
 function listResources() {
   return getState().resources.map((resource) => resourceView(resource, false));
+}
+
+function assertActiveDekOrDenied(state, resource, consumer) {
+  const dek = kmsService.findKey(state, resource.dekKeyId);
+  if (!dek) {
+    throw new Error("DEK_NOT_FOUND");
+  }
+  if (dek.status !== "ACTIVE") {
+    const reason = dek.status === "REVOKED" ? "DEK_REVOKED" : "DEK_NOT_ACTIVE";
+    addLog(state, "DATA_ACCESS", consumer.connectorId, resource.resourceId, "DENIED", reason, [
+      "CONSUMER_CERT_VERIFIED",
+      "RESOURCE_FOUND",
+      reason
+    ]);
+    return { denied: denied(reason, resource, consumer, ["CONSUMER_CERT_VERIFIED", "RESOURCE_FOUND", reason]) };
+  }
+  return { dek };
+}
+
+function assertPolicyOrDenied(state, resource, consumer) {
+  if (!policyEngine.evaluate(resource.abePolicy, consumer.attributes)) {
+    addLog(state, "DATA_ACCESS", consumer.connectorId, resource.resourceId, "DENIED", "POLICY_NOT_SATISFIED", [
+      "CONSUMER_CERT_VERIFIED",
+      "RESOURCE_FOUND",
+      "ATTRIBUTES_LOADED",
+      "POLICY_NOT_SATISFIED"
+    ]);
+    return {
+      denied: denied("POLICY_NOT_SATISFIED", resource, consumer, [
+        "CONSUMER_CERT_VERIFIED",
+        "RESOURCE_FOUND",
+        "ATTRIBUTES_LOADED",
+        "POLICY_NOT_SATISFIED"
+      ])
+    };
+  }
+  return { ok: true };
 }
 
 function decryptData(payload) {
@@ -235,32 +281,16 @@ function decryptData(payload) {
   if (resource.status !== "PUBLISHED") {
     throw new Error("RESOURCE_NOT_AVAILABLE");
   }
-  const dek = kmsService.findKey(state, resource.dekKeyId);
-  if (!dek) {
-    throw new Error("DEK_NOT_FOUND");
+  if ((resource.resourceType || "TEXT") !== "TEXT") {
+    throw new Error("USE_FILE_DOWNLOAD_API");
   }
-  if (dek.status !== "ACTIVE") {
-    const reason = dek.status === "REVOKED" ? "DEK_REVOKED" : "DEK_NOT_ACTIVE";
-    addLog(state, "DATA_ACCESS", consumer.connectorId, resource.resourceId, "DENIED", reason, [
-      "CONSUMER_CERT_VERIFIED",
-      "RESOURCE_FOUND",
-      reason
-    ]);
-    return denied(reason, resource, consumer, ["CONSUMER_CERT_VERIFIED", "RESOURCE_FOUND", reason]);
+  const dekCheck = assertActiveDekOrDenied(state, resource, consumer);
+  if (dekCheck.denied) {
+    return dekCheck.denied;
   }
-  if (!policyEngine.evaluate(resource.abePolicy, consumer.attributes)) {
-    addLog(state, "DATA_ACCESS", consumer.connectorId, resource.resourceId, "DENIED", "POLICY_NOT_SATISFIED", [
-      "CONSUMER_CERT_VERIFIED",
-      "RESOURCE_FOUND",
-      "ATTRIBUTES_LOADED",
-      "POLICY_NOT_SATISFIED"
-    ]);
-    return denied("POLICY_NOT_SATISFIED", resource, consumer, [
-      "CONSUMER_CERT_VERIFIED",
-      "RESOURCE_FOUND",
-      "ATTRIBUTES_LOADED",
-      "POLICY_NOT_SATISFIED"
-    ]);
+  const policyCheck = assertPolicyOrDenied(state, resource, consumer);
+  if (policyCheck.denied) {
+    return policyCheck.denied;
   }
 
   const unwrappedDek = cpabeDemo.decryptDek(resource.encryptedDek, consumer.abeUserKey, consumer.attributes);
@@ -282,6 +312,108 @@ function decryptData(payload) {
     plaintext,
     resourceId: resource.resourceId,
     consumerConnectorId: consumer.connectorId,
+    matchedPolicy: resource.abePolicy,
+    consumerAttributes: consumer.attributes,
+    steps
+  };
+}
+
+function uploadFile(payload) {
+  const state = getState();
+  requireReady(state);
+  const provider = getConnector(state, payload.providerConnectorId, "PROVIDER");
+  policyEngine.validate(payload.abePolicy);
+  if (!payload.contentBase64) {
+    throw new Error("FILE_CONTENT_REQUIRED");
+  }
+
+  const fileBuffer = Buffer.from(payload.contentBase64, "base64");
+  const resourceId = nextId("resource");
+  const dek = kmsService.createDek(state, provider.connectorId, resourceId);
+  const encryptedData = aesCrypto.encryptBuffer(fileBuffer, dek.material);
+  const encryptedDek = cpabeDemo.encryptDek(dek.material, payload.abePolicy, state.aa.publicKey);
+  const storage = localFileStorage.writeEncryptedFile(resourceId, encryptedData);
+  dek.resourceId = resourceId;
+
+  const resource = {
+    resourceId,
+    name: payload.name || payload.fileName || resourceId,
+    resourceType: "FILE",
+    fileName: payload.fileName || `${resourceId}.bin`,
+    mimeType: payload.mimeType || "application/octet-stream",
+    fileSize: fileBuffer.length,
+    providerConnectorId: provider.connectorId,
+    status: "PUBLISHED",
+    abePolicy: payload.abePolicy,
+    keyVersion: 1,
+    dekKeyId: dek.keyId,
+    encryptedDek,
+    encryptedData: null,
+    ciphertextPreview: encryptedData.ciphertext.slice(0, 48),
+    storageType: storage.storageType,
+    storagePath: storage.storagePath,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  state.resources.push(resource);
+  addLog(state, "FILE_UPLOAD", provider.connectorId, resource.resourceId, "SUCCESS", null, [
+    "PROVIDER_CERT_VERIFIED",
+    "POLICY_VALIDATED",
+    "DEK_GENERATED",
+    "FILE_AES_ENCRYPTED",
+    "ENCRYPTED_FILE_STORED",
+    "DEK_CPABE_ENCRYPTED",
+    "FILE_RESOURCE_PUBLISHED"
+  ]);
+  return resourceView(resource, false);
+}
+
+function downloadFile(payload) {
+  const state = getState();
+  requireReady(state);
+  const consumer = getConnector(state, payload.consumerConnectorId, "CONSUMER");
+  const resource = state.resources.find((item) => item.resourceId === payload.resourceId);
+  if (!resource) {
+    throw new Error("RESOURCE_NOT_FOUND");
+  }
+  if ((resource.resourceType || "TEXT") !== "FILE") {
+    throw new Error("RESOURCE_IS_NOT_FILE");
+  }
+  if (resource.status !== "PUBLISHED") {
+    throw new Error("RESOURCE_NOT_AVAILABLE");
+  }
+
+  const dekCheck = assertActiveDekOrDenied(state, resource, consumer);
+  if (dekCheck.denied) {
+    return dekCheck.denied;
+  }
+  const policyCheck = assertPolicyOrDenied(state, resource, consumer);
+  if (policyCheck.denied) {
+    return policyCheck.denied;
+  }
+
+  const encryptedData = localFileStorage.readEncryptedFile(resource.storagePath);
+  const unwrappedDek = cpabeDemo.decryptDek(resource.encryptedDek, consumer.abeUserKey, consumer.attributes);
+  const fileBuffer = aesCrypto.decryptBuffer(encryptedData, unwrappedDek);
+  const steps = [
+    "CONSUMER_CERT_VERIFIED",
+    "CONSUMER_STATUS_CHECKED",
+    "RESOURCE_FOUND",
+    "DEK_STATUS_ACTIVE",
+    "ATTRIBUTES_LOADED",
+    "POLICY_SATISFIED",
+    "ENCRYPTED_FILE_LOADED",
+    "DEK_CPABE_DECRYPTED",
+    "FILE_AES_DECRYPTED"
+  ];
+  addLog(state, "FILE_DOWNLOAD", consumer.connectorId, resource.resourceId, "SUCCESS", null, steps);
+  return {
+    result: "SUCCESS",
+    resourceId: resource.resourceId,
+    fileName: resource.fileName,
+    mimeType: resource.mimeType,
+    fileSize: fileBuffer.length,
+    contentBase64: fileBuffer.toString("base64"),
     matchedPolicy: resource.abePolicy,
     consumerAttributes: consumer.attributes,
     steps
@@ -374,10 +506,19 @@ function rekeyResource(resourceId) {
   if (!oldDek || oldDek.status !== "ACTIVE") {
     throw new Error("OLD_DEK_NOT_ACTIVE");
   }
-  const plaintext = aesCrypto.decrypt(resource.encryptedData, oldDek.material);
+  const plaintextBuffer =
+    (resource.resourceType || "TEXT") === "FILE"
+      ? aesCrypto.decryptBuffer(localFileStorage.readEncryptedFile(resource.storagePath), oldDek.material)
+      : Buffer.from(aesCrypto.decrypt(resource.encryptedData, oldDek.material), "utf8");
   const newDek = kmsService.createDek(state, resource.providerConnectorId, resource.resourceId);
   newDek.version = resource.keyVersion + 1;
-  resource.encryptedData = aesCrypto.encrypt(plaintext, newDek.material);
+  const newEncryptedData = aesCrypto.encryptBuffer(plaintextBuffer, newDek.material);
+  if ((resource.resourceType || "TEXT") === "FILE") {
+    localFileStorage.writeEncryptedFile(resource.resourceId, newEncryptedData);
+    resource.ciphertextPreview = newEncryptedData.ciphertext.slice(0, 48);
+  } else {
+    resource.encryptedData = newEncryptedData;
+  }
   resource.encryptedDek = cpabeDemo.encryptDek(newDek.material, resource.abePolicy, state.aa.publicKey);
   resource.dekKeyId = newDek.keyId;
   resource.keyVersion += 1;
@@ -439,6 +580,7 @@ async function seedDemo() {
 
 module.exports = {
   decryptData,
+  downloadFile,
   destroyKey,
   initSystem,
   listConnectors,
@@ -451,5 +593,6 @@ module.exports = {
   revokeKey,
   seedDemo,
   status,
+  uploadFile,
   updateConnectorAttributes
 };

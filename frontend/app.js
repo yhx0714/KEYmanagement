@@ -71,7 +71,7 @@ function renderConnectors() {
             <div class="tags">
               ${connector.attributes.map((attr) => `<span class="tag">${attr}</span>`).join("")}
             </div>
-            <p class="muted">证书：${connector.certificate.certificateId} · ABE Key：${connector.abeUserKey.keyId}</p>
+            <p class="muted">证书：${connector.certificate?.certificateId || "-"} · ABE Key：${connector.abeUserKey?.keyId || "-"}</p>
           </div>
         `
       )
@@ -86,12 +86,16 @@ function renderConnectors() {
     .map((item) => `<option value="${item.connectorId}">${item.name}</option>`)
     .join("");
   el("providerSelect").innerHTML = providerOptions;
+  el("fileProviderSelect").innerHTML = providerOptions;
   el("consumerSelect").innerHTML = consumerOptions;
 }
 
 function renderResources() {
   el("resourceSelect").innerHTML = state.resources
-    .map((item) => `<option value="${item.resourceId}">${item.name} · ${item.resourceId}</option>`)
+    .map((item) => {
+      const type = item.resourceType === "FILE" ? "文件" : "文本";
+      return `<option value="${item.resourceId}">[${type}] ${item.name} · ${item.resourceId}</option>`;
+    })
     .join("");
 }
 
@@ -164,6 +168,32 @@ function selectedResource() {
   return state.resources.find((item) => item.resourceId === resourceId);
 }
 
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function downloadBase64File(fileName, mimeType, contentBase64) {
+  const byteCharacters = atob(contentBase64);
+  const byteNumbers = Array.from(byteCharacters, (char) => char.charCodeAt(0));
+  const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName || "download.bin";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function main() {
   el("initBtn").addEventListener("click", async () => {
     const data = await api("/api/system/init", { method: "POST", body: {} });
@@ -204,15 +234,65 @@ async function main() {
     await refresh();
   });
 
+  el("fileUploadBtn").addEventListener("click", async () => {
+    const file = el("fileInput").files[0];
+    if (!file) {
+      renderResult(el("fileUploadResult"), "请先选择一个本地文件。");
+      return;
+    }
+    const contentBase64 = await fileToBase64(file);
+    const data = await api("/api/files/upload", {
+      method: "POST",
+      body: {
+        providerConnectorId: el("fileProviderSelect").value,
+        name: file.name,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        contentBase64,
+        abePolicy: el("filePolicyInput").value
+      }
+    });
+    renderResult(el("fileUploadResult"), data);
+    await refresh();
+  });
+
   el("decryptBtn").addEventListener("click", async () => {
+    const resource = selectedResource();
+    if (!resource || resource.resourceType === "FILE") {
+      renderResult(el("decryptResult"), "当前选择的是文件资源，请点击“下载文件”。");
+      return;
+    }
     const data = await api("/api/data/decrypt", {
       method: "POST",
       body: {
         consumerConnectorId: el("consumerSelect").value,
-        resourceId: el("resourceSelect").value
+        resourceId: resource.resourceId
       }
     });
     renderResult(el("decryptResult"), data);
+    await refresh();
+  });
+
+  el("fileDownloadBtn").addEventListener("click", async () => {
+    const resource = selectedResource();
+    if (!resource || resource.resourceType !== "FILE") {
+      renderResult(el("decryptResult"), "当前选择的不是文件资源，请先上传或选择一个文件资源。");
+      return;
+    }
+    const data = await api("/api/files/download", {
+      method: "POST",
+      body: {
+        consumerConnectorId: el("consumerSelect").value,
+        resourceId: resource.resourceId
+      }
+    });
+    renderResult(el("decryptResult"), {
+      ...data,
+      contentBase64: `[已返回 ${data.contentBase64.length} 个 Base64 字符，并触发浏览器下载]`
+    });
+    if (data.result === "SUCCESS") {
+      downloadBase64File(data.fileName, data.mimeType, data.contentBase64);
+    }
     await refresh();
   });
 
@@ -238,6 +318,10 @@ async function main() {
 
   el("rekeyBtn").addEventListener("click", async () => {
     const resource = selectedResource();
+    if (!resource) {
+      renderResult(el("decryptResult"), "请先选择一个资源。");
+      return;
+    }
     const data = await api(`/api/data/resources/${resource.resourceId}/rekey`, {
       method: "POST",
       body: {}
@@ -248,6 +332,10 @@ async function main() {
 
   el("revokeDekBtn").addEventListener("click", async () => {
     const resource = selectedResource();
+    if (!resource) {
+      renderResult(el("decryptResult"), "请先选择一个资源。");
+      return;
+    }
     const data = await api(`/api/keys/${resource.dekKeyId}/revoke`, {
       method: "POST",
       body: {}

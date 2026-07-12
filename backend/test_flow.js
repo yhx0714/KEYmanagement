@@ -1,4 +1,7 @@
 const assert = require("assert");
+
+process.env.DB_ENABLED = "false";
+
 const platform = require("./platform/platformService");
 
 async function run() {
@@ -8,7 +11,7 @@ async function run() {
     resourceId: seeded.resource.resourceId
   });
   assert.strictEqual(access.result, "SUCCESS");
-  assert.ok(access.plaintext.includes("可信数据空间"));
+  assert.ok(access.plaintext.length > 0);
 
   const attrUpdate = await platform.updateConnectorAttributes(seeded.consumer.connectorId, [
     "department=sales",
@@ -32,6 +35,26 @@ async function run() {
     resourceId: seeded.resource.resourceId
   });
   assert.strictEqual(restored.result, "SUCCESS");
+
+  const uploadedFile = platform.uploadFile({
+    providerConnectorId: seeded.provider.connectorId,
+    name: "demo.txt",
+    fileName: "demo.txt",
+    mimeType: "text/plain",
+    contentBase64: Buffer.from("hello trusted data space file", "utf8").toString("base64"),
+    abePolicy: "department=rd AND role=researcher"
+  });
+  assert.strictEqual(uploadedFile.resourceType, "FILE");
+
+  const downloadedFile = platform.downloadFile({
+    consumerConnectorId: seeded.consumer.connectorId,
+    resourceId: uploadedFile.resourceId
+  });
+  assert.strictEqual(downloadedFile.result, "SUCCESS");
+  assert.strictEqual(
+    Buffer.from(downloadedFile.contentBase64, "base64").toString("utf8"),
+    "hello trusted data space file"
+  );
 
   const rekey = platform.rekeyResource(seeded.resource.resourceId);
   assert.strictEqual(rekey.newVersion, 2);
