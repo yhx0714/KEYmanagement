@@ -134,6 +134,20 @@
       </section>
     </main>
 
+    <div id="notifyOverlay" class="notify-overlay" hidden>
+      <div id="notifyDialog" class="notify-dialog" role="alertdialog" aria-modal="true">
+        <div class="notify-head">
+          <span id="notifyBadge" class="notify-badge"></span>
+          <h2 id="notifyTitle"></h2>
+        </div>
+        <p id="notifyMessage"></p>
+        <pre id="notifyDetails" class="notify-details"></pre>
+        <div class="notify-actions">
+          <button id="notifyCloseBtn">知道了</button>
+        </div>
+      </div>
+    </div>
+
     <script src="./app.js"></script>
   </body>
 </html>
