@@ -1,4 +1,5 @@
 const assert = require("assert");
+const path = require("path");
 
 process.env.DB_ENABLED = "false";
 
@@ -29,6 +30,7 @@ async function run() {
     contentBase64: Buffer.from("hello trusted data space file", "utf8").toString("base64")
   });
   assert.strictEqual(importedFile.status, "LOCAL");
+  importedFile.localPath = path.join(provider.fileDirectory, "missing-demo.txt");
 
   const publishedFile = await platform.publishConnectorFile({
     providerConnectorId: provider.connectorId,
@@ -70,10 +72,10 @@ async function run() {
   });
   assert.strictEqual(restored.result, "SUCCESS");
 
-  const rekey = platform.rekeyResource(publishedFile.resourceId);
+  const rekey = await platform.rekeyResource(publishedFile.resourceId);
   assert.strictEqual(rekey.newVersion, 2);
 
-  const revoked = platform.revokeKey(rekey.newDekKeyId);
+  const revoked = await platform.revokeKey(rekey.newDekKeyId);
   assert.strictEqual(revoked.status, "REVOKED");
 
   const deniedByDek = await platform.downloadFile({

@@ -8,8 +8,8 @@ const policyEngine = require("../policy/policyEngine");
 const connectorRepository = require("../db/connectorRepository");
 const connectorFileStorage = require("../storage/connectorFileStorage");
 const localFileStorage = require("../storage/localFileStorage");
-const { getState, resetState } = require("../storage/store");
-const { nextId, nowIso } = require("../utils/ids");
+const { createInitialState, getState, replaceState, resetState } = require("../storage/store");
+const { nextId, nowIso, seedIds } = require("../utils/ids");
 
 function addLog(state, operation, actorId, targetId, result, reason, steps) {
   const log = {
@@ -23,6 +23,7 @@ function addLog(state, operation, actorId, targetId, result, reason, steps) {
     createdAt: nowIso()
   };
   state.logs.unshift(log);
+  connectorRepository.saveAccessLog(log).catch(() => {});
   return log;
 }
 
@@ -32,11 +33,7 @@ function requireReady(state) {
   }
 }
 
-async function initSystem() {
-  await connectorRepository.clearAllDemoData();
-  connectorFileStorage.clearConnectorDirectories();
-  localFileStorage.clearEncryptedFiles();
-  const state = resetState();
+function bootstrapCore(state) {
   caService.initCa(state);
   const abeSecret = crypto.randomBytes(32).toString("base64");
   state.aa.publicKey = {
@@ -46,10 +43,106 @@ async function initSystem() {
   };
   state.aa.masterSecretRef = state.aa.publicKey.masterSecretRef;
   state.system.aaStatus = "READY";
-  kmsService.initKms(state);
+  const masterKey = kmsService.initKms(state);
   state.system.status = "READY";
   state.system.platformStatus = "READY";
   state.system.initializedAt = nowIso();
+  return masterKey;
+}
+
+async function saveSystemBootstrap(state, masterKey) {
+  await connectorRepository.saveSystemSettings({
+    caRootCertificate: state.ca.rootCertificate,
+    aaPublicKey: state.aa.publicKey,
+    aaMasterSecretRef: state.aa.masterSecretRef,
+    initializedAt: state.system.initializedAt
+  });
+  await connectorRepository.saveDataKey(masterKey);
+}
+
+function collectIds(state) {
+  const materialIds = state.kms.keys
+    .map((key) => String(key.materialRef || "").split("/").pop())
+    .filter(Boolean);
+  return [
+    state.ca.rootCertificate?.certificateId,
+    state.aa.publicKey?.keyId,
+    ...state.connectors.map((connector) => connector.connectorId),
+    ...state.connectors.map((connector) => connector.certificate?.certificateId),
+    ...state.connectors.flatMap((connector) =>
+      (connector.ownedFiles || []).map((file) => file.connectorFileId)
+    ),
+    ...state.kms.keys.map((key) => key.keyId),
+    ...materialIds,
+    ...state.resources.map((resource) => resource.resourceId),
+    ...state.logs.map((log) => log.logId)
+  ].filter(Boolean);
+}
+
+async function restoreSystem() {
+  const state = createInitialState();
+  const settings = await connectorRepository.loadSystemSettings();
+  const hasSavedSystem = settings && settings.aaPublicKey && settings.aaMasterSecretRef;
+
+  if (hasSavedSystem) {
+    state.ca.rootCertificate = settings.caRootCertificate || null;
+    state.aa.publicKey = settings.aaPublicKey;
+    state.aa.masterSecretRef = settings.aaMasterSecretRef;
+    state.system.caStatus = state.ca.rootCertificate ? "READY" : "NOT_READY";
+    state.system.aaStatus = "READY";
+    state.system.status = "READY";
+    state.system.platformStatus = "READY";
+    state.system.kmsStatus = "READY";
+    state.system.initializedAt = settings.initializedAt || nowIso();
+  } else {
+    const masterKey = bootstrapCore(state);
+    await saveSystemBootstrap(state, masterKey);
+  }
+
+  state.connectors = (await connectorRepository.listConnectors()) || [];
+  state.connectors.forEach((connector) => {
+    connector.fileDirectory = connectorFileStorage.connectorDirectory(connector.connectorId);
+    connector.oldAttributeSets = connector.oldAttributeSets || [];
+    connector.ownedFiles = connector.ownedFiles || [];
+    if (connector.abeUserKey && !connector.abeUserKey.masterSecretRef) {
+      connector.abeUserKey.masterSecretRef = state.aa.masterSecretRef;
+    }
+  });
+
+  const dataKeys = (await connectorRepository.listDataKeys()) || state.kms.keys;
+  state.kms.keys = [...dataKeys];
+  state.kms.masterKeys = dataKeys.filter((key) => key.keyType === "KMS_MASTER_KEY");
+  if (state.kms.masterKeys.length === 0) {
+    const masterKey = kmsService.initKms(state);
+    await connectorRepository.saveDataKey(masterKey);
+  }
+  state.connectors.forEach((connector) => {
+    if (connector.abeUserKey && !state.kms.keys.some((key) => key.keyId === connector.abeUserKey.keyId)) {
+      state.kms.keys.push(connector.abeUserKey);
+    }
+  });
+
+  state.resources = (await connectorRepository.listResources()) || [];
+  state.logs = (await connectorRepository.listAccessLogs()) || [];
+  replaceState(state);
+  seedIds(collectIds(state));
+  addLog(state, "SYSTEM_RESTORE", "platform", null, "SUCCESS", null, [
+    "DATABASE_LOADED",
+    "CONNECTORS_RESTORED",
+    "RESOURCES_RESTORED",
+    "KEYS_RESTORED",
+    "PLATFORM_READY"
+  ]);
+  return status();
+}
+
+async function initSystem() {
+  await connectorRepository.clearAllDemoData();
+  connectorFileStorage.clearConnectorDirectories();
+  localFileStorage.clearEncryptedFiles();
+  const state = resetState();
+  const masterKey = bootstrapCore(state);
+  await saveSystemBootstrap(state, masterKey);
   addLog(state, "SYSTEM_INIT", "platform", null, "SUCCESS", null, [
     "CA_INITIALIZED",
     "AA_INITIALIZED",
@@ -172,7 +265,7 @@ function getConnector(state, connectorId, label) {
   return connector;
 }
 
-function publishData(payload) {
+async function publishData(payload) {
   const state = getState();
   requireReady(state);
   const provider = getConnector(state, payload.providerConnectorId, "PROVIDER");
@@ -199,6 +292,8 @@ function publishData(payload) {
     updatedAt: nowIso()
   };
   state.resources.push(resource);
+  await connectorRepository.saveDataKey(dek);
+  await connectorRepository.saveResource(resource);
   addLog(state, "DATA_PUBLISH", provider.connectorId, resource.resourceId, "SUCCESS", null, [
     "PROVIDER_CERT_VERIFIED",
     "POLICY_VALIDATED",
@@ -381,7 +476,13 @@ async function publishConnectorFile(payload) {
   const provider = getConnector(state, payload.providerConnectorId, "PROVIDER");
   policyEngine.validate(payload.abePolicy);
   const connectorFile = findConnectorFile(provider, payload.connectorFileId);
-  const fileBuffer = connectorFileStorage.readConnectorFile(connectorFile.localPath);
+  const resolvedPath = connectorFileStorage.resolveConnectorFilePath(connectorFile);
+  if (resolvedPath !== connectorFile.localPath) {
+    connectorFile.localPath = resolvedPath;
+    connectorFile.updatedAt = nowIso();
+    await connectorRepository.saveConnectorFile(connectorFile);
+  }
+  const fileBuffer = connectorFileStorage.readConnectorFile(resolvedPath);
   const resourceId = nextId("resource");
   const dek = kmsService.createDek(state, provider.connectorId, resourceId);
   const encryptedData = aesCrypto.encryptBuffer(fileBuffer, dek.material);
@@ -411,6 +512,8 @@ async function publishConnectorFile(payload) {
     updatedAt: nowIso()
   };
   state.resources.push(resource);
+  await connectorRepository.saveDataKey(dek);
+  await connectorRepository.saveResource(resource);
   connectorFile.status = "PUBLISHED";
   connectorFile.publishedResourceId = resourceId;
   connectorFile.updatedAt = nowIso();
@@ -568,21 +671,23 @@ function listKeys() {
   return getState().kms.keys.map(kmsService.publicKeyView);
 }
 
-function revokeKey(keyId) {
+async function revokeKey(keyId) {
   const state = getState();
   const key = kmsService.revokeKey(state, keyId);
+  await connectorRepository.updateDataKey(key);
   addLog(state, "KEY_REVOKE", "platform", keyId, "SUCCESS", null, ["KEY_REVOKED"]);
   return kmsService.publicKeyView(key);
 }
 
-function destroyKey(keyId) {
+async function destroyKey(keyId) {
   const state = getState();
   const key = kmsService.destroyKey(state, keyId);
+  await connectorRepository.updateDataKey(key);
   addLog(state, "KEY_DESTROY", "platform", keyId, "SUCCESS", null, ["KEY_DESTROYED"]);
   return kmsService.publicKeyView(key);
 }
 
-function rekeyResource(resourceId) {
+async function rekeyResource(resourceId) {
   const state = getState();
   requireReady(state);
   const resource = state.resources.find((item) => item.resourceId === resourceId);
@@ -612,6 +717,9 @@ function rekeyResource(resourceId) {
   resource.updatedAt = nowIso();
   oldDek.status = "ROTATED";
   oldDek.updatedAt = nowIso();
+  await connectorRepository.saveDataKey(newDek);
+  await connectorRepository.updateDataKey(oldDek);
+  await connectorRepository.saveResource(resource);
   addLog(state, "RESOURCE_REKEY", "platform", resource.resourceId, "SUCCESS", null, [
     "NEW_DEK_GENERATED",
     "DATA_REENCRYPTED",
@@ -680,6 +788,7 @@ module.exports = {
   registerConnector,
   rekeyResource,
   revokeKey,
+  restoreSystem,
   status,
   updateConnectorAttributes
 };

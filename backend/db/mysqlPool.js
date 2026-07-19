@@ -61,8 +61,24 @@ async function executeSchemaIfEnabled() {
     for (const statement of statements) {
       await connection.query(statement);
     }
+    await runLightMigrations(connection);
   } finally {
     await connection.end();
+  }
+}
+
+async function runLightMigrations(connection) {
+  const migrations = [
+    "ALTER TABLE connector_abe_keys ADD COLUMN master_secret_ref VARCHAR(255) AFTER attributes_json"
+  ];
+  for (const sql of migrations) {
+    try {
+      await connection.query(sql);
+    } catch (error) {
+      if (error.code !== "ER_DUP_FIELDNAME" && error.code !== "ER_NO_SUCH_TABLE") {
+        throw error;
+      }
+    }
   }
 }
 

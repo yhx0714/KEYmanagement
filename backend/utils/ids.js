@@ -19,9 +19,22 @@ function resetIds() {
   Object.keys(counters).forEach((key) => delete counters[key]);
 }
 
+function seedIds(ids) {
+  ids.forEach((id) => {
+    const match = String(id || "").match(/^(.+)-(\d+)$/);
+    if (!match) {
+      return;
+    }
+    const prefix = match[1];
+    const value = Number(match[2]);
+    counters[prefix] = Math.max(counters[prefix] || 0, value);
+  });
+}
+
 module.exports = {
   nextId,
   fingerprint,
   nowIso,
-  resetIds
+  resetIds,
+  seedIds
 };

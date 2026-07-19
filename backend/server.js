@@ -132,6 +132,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 executeSchemaIfEnabled()
+  .then(() => platform.restoreSystem())
   .then(() => {
     server.listen(PORT, () => {
       console.log(`Trusted data space key demo is running at http://localhost:${PORT}`);

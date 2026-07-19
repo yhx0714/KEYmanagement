@@ -101,7 +101,7 @@ function closeNotice() {
 function availableAttributesText() {
   return state.defaultAttributes.length
     ? `可用属性：\n${state.defaultAttributes.map((attr) => `- ${attr}`).join("\n")}`
-    : "可用属性暂未加载，请先刷新或重新初始化系统。";
+    : "可用属性暂未加载，请先刷新页面或检查后端服务状态。";
 }
 
 function explainError(error) {
@@ -130,7 +130,14 @@ function explainError(error) {
   if (message === "SYSTEM_NOT_INITIALIZED") {
     return {
       title: "系统未初始化",
-      message: "请先点击“重新初始化”，再执行后续操作。",
+      message: "系统基础状态未准备好。请刷新页面，或检查后端服务和数据库连接是否正常。",
+      details: ""
+    };
+  }
+  if (message === "CONNECTOR_FILE_CONTENT_NOT_FOUND") {
+    return {
+      title: "本地文件不存在",
+      message: "数据库中有该 Connector 文件记录，但在 Connector 本地目录中没有找到对应文件。请确认文件没有被手动删除，或重新导入该文件。",
       details: ""
     };
   }
@@ -369,9 +376,16 @@ async function main() {
   });
 
   el("initBtn").addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      "确定要重置演示系统吗？\n\n该操作会删除数据库中的 Connector、资源、密钥、日志记录，并清空本地上传文件和系统加密文件。"
+    );
+    if (!confirmed) {
+      showNotice("warning", "已取消重置", "系统数据没有被修改。");
+      return;
+    }
     await runAction({
-      successTitle: "初始化完成",
-      successMessage: "已删除所有 Connector、系统资源、上传文件和本地目录文件。",
+      successTitle: "重置完成",
+      successMessage: "已删除所有 Connector、系统资源、密钥、日志、上传文件和本地目录文件。",
       resultTarget: el("fileImportResult"),
       action: () => api("/api/system/init", { method: "POST", body: {} })
     });
@@ -549,8 +563,8 @@ async function main() {
   try {
     await refresh();
   } catch (error) {
-    await api("/api/system/init", { method: "POST", body: {} });
-    await refresh();
+    const friendly = explainError(error);
+    showNotice("error", friendly.title, friendly.message, friendly.details);
   }
 }
 

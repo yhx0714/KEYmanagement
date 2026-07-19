@@ -29,6 +29,37 @@ function readConnectorFile(localPath) {
   return fs.readFileSync(localPath);
 }
 
+function resolveConnectorFilePath(fileRecord) {
+  if (fileRecord.localPath && fs.existsSync(fileRecord.localPath)) {
+    return fileRecord.localPath;
+  }
+
+  const directory = connectorDirectory(fileRecord.connectorId);
+  const candidates = [];
+  if (fileRecord.localPath) {
+    candidates.push(path.join(directory, path.basename(fileRecord.localPath)));
+  }
+  candidates.push(path.join(directory, `${fileRecord.connectorFileId}-${safeName(fileRecord.fileName)}`));
+
+  const existing = candidates.find((candidate) => fs.existsSync(candidate));
+  if (existing) {
+    return existing;
+  }
+
+  const prefix = `${fileRecord.connectorFileId}-`;
+  const byId = fs
+    .readdirSync(directory)
+    .map((entry) => path.join(directory, entry))
+    .find((candidate) => path.basename(candidate).startsWith(prefix) && fs.existsSync(candidate));
+  if (byId) {
+    return byId;
+  }
+
+  const error = new Error("CONNECTOR_FILE_CONTENT_NOT_FOUND");
+  error.localPath = fileRecord.localPath || path.join(directory, `${prefix}${safeName(fileRecord.fileName)}`);
+  throw error;
+}
+
 function clearConnectorDirectories() {
   if (fs.existsSync(CONNECTOR_ROOT)) {
     fs.rmSync(CONNECTOR_ROOT, { recursive: true, force: true });
@@ -41,5 +72,6 @@ module.exports = {
   clearConnectorDirectories,
   connectorDirectory,
   readConnectorFile,
+  resolveConnectorFilePath,
   writeConnectorFile
 };

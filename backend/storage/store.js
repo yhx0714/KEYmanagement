@@ -54,8 +54,15 @@ function resetState() {
   return state;
 }
 
+function replaceState(nextState) {
+  state = nextState;
+  return state;
+}
+
 module.exports = {
   defaultAttributes,
+  createInitialState,
   getState,
+  replaceState,
   resetState
 };
